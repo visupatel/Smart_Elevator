@@ -4,8 +4,6 @@ from rest_framework import status
 from .validation import isValid_type
 from .models import UserRequest, Elevator
 
-
-
 def assign_elevator(source_floor, direction):
 
     elevators = Elevator.objects.all()
@@ -142,18 +140,13 @@ def add_request(request):
 
 @api_view(['POST'])
 def move_elevator(request):
-
     try:
-        if Elevator.objects.filter(is_emergency=True).exists():
-            return Response({
-                "status": "failed",
-                "message": "Emergency mode active. Elevator movement blocked."
-            }, status=400)
-            
-        results = []
+        
         elevators = Elevator.objects.all()
-
+        results = []
         for elevator in elevators:
+            if elevator.is_emergency:
+                continue
 
             requests = UserRequest.objects.filter(
                 elevator=elevator,
@@ -168,9 +161,12 @@ def move_elevator(request):
             up = requests.filter(source_floor__gte=current).order_by("source_floor")
             down = requests.filter(source_floor__lt=current).order_by("-source_floor")
 
+            # take up requests if up request completed then take down request
             if elevator.direction in ["UP", "IDLE"]:
                 queue = list(up) + list(down)
                 elevator.direction = "UP"
+            
+            # take down requests if down request completed then take up request
             else:
                 queue = list(down) + list(up)
                 elevator.direction = "DOWN"
@@ -194,7 +190,8 @@ def move_elevator(request):
                 movement_log.append({
                     "request_id": req.id,
                     "from": req.source_floor,
-                    "to": req.destination_floor
+                    "to": req.destination_floor,
+                    "direction":req.direction
                 })
 
             elevator.is_moving = False
@@ -207,12 +204,12 @@ def move_elevator(request):
                 "movements": movement_log
             })
         
-        if results == []:
+        if not results:
             return Response({
-                "status": "success",
-                "message":"No elevator moving",
+                "status": "failed",
+                "message":"No elevator moving because no request arrived or all elevators are on emergency mode.",
                 },
-                status=status.HTTP_200_OK
+                status=status.HTTP_400_BAD_REQUEST
                 )
         
         return Response({
@@ -234,33 +231,106 @@ def move_elevator(request):
 
 @api_view(['POST'])
 def emergency_on(request):
-    
-    # emergency mode on
-    Elevator.objects.all().update(
-        is_emergency=True,
-        is_moving=False,
-        direction="IDLE"
-    )
+    try:
+        elevator_id = request.data.get("elevator_id")
 
-    return Response({
-        "status": "success",
-        "message": "Emergency mode ON"
-    },
-    status=status.HTTP_200_OK
-    )
+        if not elevator_id:
+            return Response({
+                "status": "failed",
+                "message": "'elevator_id' must be required"
+            }, 
+            status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        elevator_id = isValid_type(int,elevator_id,"integer","elevator_id")
+        
+        # emergency mode on
+        elevator = Elevator.objects.get(id=elevator_id)
+        elevator.is_emergency=True
+        elevator.is_moving=False
+        elevator.direction="IDLE"
+        elevator.save()
+
+        return Response({
+            "status": "success",
+            "message": f"Elevator '{elevator.name}' Emergency mode ON"
+        },
+        status=status.HTTP_200_OK
+        )
+    
+    except ValueError as e:
+        return Response({
+            "status":"failed",
+            "message":str(e)
+        },
+        status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    except Elevator.DoesNotExist:
+        return Response({
+            "status":"failed",
+            "message":"No such elevator, only 1,2 and 3 elevators"
+        },
+        status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    except Exception as e:
+        return Response({
+            "status":"error",
+            "message":str(e),
+        },
+        status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
 
 
 @api_view(['POST'])
-def emergency_off(request):
+def emergency_off(request):   
+    try:
+        elevator_id = request.data.get("elevator_id")
 
-    # emergency mode off
-    Elevator.objects.all().update(
-        is_emergency=False
-    )
+        if not elevator_id:
+            return Response({
+                "status": "failed",
+                "message": "'elevator_id' must be required"
+            }, 
+            status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        elevator_id = isValid_type(int,elevator_id,"integer","elevator_id")
 
-    return Response({
-        "status": "success",
-        "message": "Emergency mode OFF"
-    },
-    status=status.HTTP_200_OK
-    )
+        # emergency mode off
+        elevator = Elevator.objects.get(id=elevator_id)
+        elevator.is_emergency=False
+        elevator.save()
+        
+        return Response({
+            "status": "success",
+            "message": f"Elevator '{elevator.name}' Emergency mode OFF"
+        },
+        status=status.HTTP_200_OK
+        )
+    
+    except ValueError as e:
+        return Response({
+            "status":"failed",
+            "message":str(e)
+        },
+        status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    except Elevator.DoesNotExist:
+        return Response({
+            "status":"failed",
+            "message":"No such elevator, only 1,2 and 3 elevators"
+        },
+        status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    except Exception as e:
+        return Response({
+            "status":"error",
+            "message":str(e),
+        },
+        status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+    
